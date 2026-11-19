@@ -24,7 +24,6 @@ var WAIT_MS = 15000;
 
 var app = document.getElementById('app');
 var token = '';
-var key = 'k' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 function say(html) { app.innerHTML = '<div id="msg">' + html + '</div>'; }
 function call() { return PHONE ? ' or call us on ' + PHONE : ' or call us'; }
@@ -57,8 +56,7 @@ function show(d) {
 }
 
 function wire(d) {
-  var accept = document.getElementById('pd-accept');
-  if (accept) setupSign(accept);
+  pdWire({ show: show, submit: function (body, ok, no) { body.p = token; ask(body).then(ok, no); } });
   var dl = document.getElementById('pd-download');   // engine marks the signed-copy button with this id
   if (dl && d.pdfB64) {
     dl.addEventListener('click', function (e) {
@@ -72,34 +70,132 @@ function wire(d) {
   }
 }
 
-function setupSign(btn) {
-  var cv = document.getElementById('pd-sig'), nm = document.getElementById('pd-name'), ctx = cv.getContext('2d');
-  var drawing = false, ink = 0, strokes = 0, pts = 0, last = null;
-  ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.strokeStyle = '#1D2A22';
-  function pos(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height }; }
-  cv.addEventListener('pointerdown', function (e) { drawing = true; last = pos(e); strokes++; pts++; cv.setPointerCapture(e.pointerId); e.preventDefault(); });
-  cv.addEventListener('pointermove', function (e) {
-    if (!drawing) return; var p = pos(e); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
-    ink += Math.abs(p.x - last.x) + Math.abs(p.y - last.y); pts++; last = p; e.preventDefault();
+/* The client proposal page's own code (Version C, Allie 11/19). ONE source file: it is copied word for word into the page on
+   proposals.mygreenservices.com (repo proposal-page, index.html) and into the board's own Accept page (AcceptMain.js). A test checks both copies.
+   pdWire(host): host.submit(body, onDone, onFail) sends one request to the board and calls onDone(answer) or onFail().
+   It holds no data and no secret. Everything it shows from the client is set with textContent, never as HTML. */
+function pdWire(host) {
+  var doc = document, win = window;
+  function $(id) { return doc.getElementById(id); }
+  function key() { return 'k' + Math.random().toString(36).slice(2) + Date.now().toString(36); }
+  var sendKey = key();
+
+  /* ---- print ---- */
+  var pr = $('pd-print');
+  if (pr) pr.addEventListener('click', function () { win.print(); });
+
+  /* ---- photos: tap one to see it big, with arrows and swipe ---- */
+  var imgs = [].slice.call(doc.querySelectorAll('img.pdimg')), cur = 0, lb = null, tx = null;
+  function lbShow() {
+    if (!lb) return;
+    lb.querySelector('img').src = imgs[cur].src;
+    lb.querySelector('.c').textContent = imgs.length > 1 ? (cur + 1) + ' of ' + imgs.length : '';
+  }
+  function lbClose() { if (lb) { lb.remove(); lb = null; doc.removeEventListener('keydown', lbKey); } }
+  function lbStep(d) { if (imgs.length > 1) { cur = (cur + d + imgs.length) % imgs.length; lbShow(); } }
+  function lbKey(e) { if (e.key === 'Escape') lbClose(); else if (e.key === 'ArrowRight') lbStep(1); else if (e.key === 'ArrowLeft') lbStep(-1); }
+  function lbOpen(i) {
+    cur = i; lbClose();
+    lb = doc.createElement('div'); lb.id = 'pd-lb'; lb.setAttribute('role', 'dialog'); lb.setAttribute('aria-label', 'Photo');
+    lb.innerHTML = '<img alt=""><button type="button" class="x" aria-label="Close" style="top:12px;right:12px">&times;</button><div class="c"></div>' +
+      (imgs.length > 1 ? '<button type="button" class="p" aria-label="Previous photo" style="left:10px">&#8249;</button><button type="button" class="n" aria-label="Next photo" style="right:10px">&#8250;</button>' : '');
+    doc.body.appendChild(lb); lbShow();
+    lb.addEventListener('click', function (e) {
+      var t = e.target;
+      if (t.className === 'x' || t === lb) lbClose(); else if (t.className === 'p') lbStep(-1); else if (t.className === 'n') lbStep(1);
+    });
+    lb.addEventListener('touchstart', function (e) { tx = e.touches[0].clientX; }, { passive: true });
+    lb.addEventListener('touchend', function (e) { if (tx == null) return; var dx = e.changedTouches[0].clientX - tx; tx = null; if (Math.abs(dx) > 50) lbStep(dx < 0 ? 1 : -1); }, { passive: true });
+    doc.addEventListener('keydown', lbKey);
+  }
+  imgs.forEach(function (im, i) {
+    im.addEventListener('click', function () { lbOpen(i); });
+    im.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); lbOpen(i); } });
   });
-  function up() { drawing = false; }
+
+  /* ---- the three choices (only on an open proposal) ---- */
+  var actions = $('pd-actions');
+  if (!actions) return;
+  var panels = { accept: $('pd-p-accept'), decline: $('pd-p-decline'), changes: $('pd-p-changes') }, msg = $('pd-msg'), busy = false;
+  function say(t) { msg.textContent = t || ''; }
+  function show(which) {
+    actions.hidden = !!which;
+    Object.keys(panels).forEach(function (k) { if (panels[k]) panels[k].hidden = k !== which; });
+    say('');
+    var p = panels[which]; if (p && p.scrollIntoView) p.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+  $('pd-go-accept').addEventListener('click', function () { show('accept'); });
+  $('pd-go-changes').addEventListener('click', function () { show('changes'); });
+  $('pd-go-decline').addEventListener('click', function () { show('decline'); });
+  [].forEach.call(doc.querySelectorAll('.pd-back'), function (b) { b.addEventListener('click', function () { show(''); }); });
+
+  function thanks(title, text) {
+    var c = $('pd-actions').parentNode;
+    ['pd-actions', 'pd-p-accept', 'pd-p-decline', 'pd-p-changes', 'pd-msg'].forEach(function (id) { var e = $(id); if (e) e.remove(); });
+    var d = doc.createElement('div'); d.className = 'panel'; d.style.textAlign = 'center'; d.setAttribute('role', 'status');
+    var h = doc.createElement('h2'); h.textContent = title; var p = doc.createElement('div'); p.textContent = text; d.appendChild(h); d.appendChild(p);
+    var at = c.querySelector('.terms'); c.insertBefore(d, at); d.scrollIntoView({ block: 'center' });
+  }
+  function send(btn, label, body, ok) {
+    if (busy) return; busy = true; btn.disabled = true; btn.textContent = 'Sending...'; say('');
+    body.key = sendKey;
+    host.submit(body, function (d) { busy = false; if (!ok(d)) { btn.disabled = false; btn.textContent = label; say('That did not go through. Nothing was recorded. Please press the button again.'); } },
+      function () { busy = false; btn.disabled = false; btn.textContent = label; say('That did not go through. Nothing was recorded. Please press the button again.'); });
+  }
+
+  /* decline */
+  var reason = '';
+  [].forEach.call(doc.querySelectorAll('#pd-reasons label'), function (l) {
+    l.addEventListener('click', function () { [].forEach.call(doc.querySelectorAll('#pd-reasons label'), function (x) { x.className = ''; }); l.className = 'on'; reason = l.textContent; });
+  });
+  $('pd-send-decline').addEventListener('click', function () {
+    send(this, 'Send', { a: 'decline', reason: reason, note: $('pd-dnote').value.slice(0, 1000) }, function (d) {
+      if (d && d.v === 1 && d.kind === 'declined') { thanks('Thank you for letting us know.', 'We have noted that this is not a fit right now. If anything changes, just reply to our email.'); return true; }
+      if (d && d.v === 1 && d.kind === 'accepted') { host.show(d); return true; } return false;
+    });
+  });
+
+  /* request changes */
+  $('pd-send-changes').addEventListener('click', function () {
+    var note = $('pd-cnote').value.replace(/\s+/g, ' ').trim();
+    if (note.length < 3) { say('Please tell us what you would like changed.'); return; }
+    send(this, 'Send', { a: 'changes', note: $('pd-cnote').value.slice(0, 1000) }, function (d) {
+      if (d && d.v === 1 && d.kind === 'changes') { thanks('Got it, we are on it.', 'We will send you a revised proposal. You will get a new email when it is ready.'); return true; }
+      if (d && d.v === 1 && d.kind === 'accepted') { host.show(d); return true; } return false;
+    });
+  });
+
+  /* accept: sign with finger, mouse or pen (pointer events), or type the name */
+  var cv = $('pd-sig'), nm = $('pd-name'), ctx = cv.getContext('2d'), strokes = [], line = null, drawing = false, ink = 0, typed = false;
+  ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#1D2A22';
+  function pos(e) { var r = cv.getBoundingClientRect(); return [Math.round((e.clientX - r.left) * cv.width / r.width), Math.round((e.clientY - r.top) * cv.height / r.height)]; }
+  cv.addEventListener('pointerdown', function (e) {
+    if (typed) return; drawing = true; line = [pos(e)]; strokes.push(line); ctx.beginPath(); ctx.moveTo(line[0][0], line[0][1]);
+    try { cv.setPointerCapture(e.pointerId); } catch (x) {} e.preventDefault();
+  });
+  cv.addEventListener('pointermove', function (e) {
+    if (!drawing) return; var p = pos(e), q = line[line.length - 1]; line.push(p); ctx.lineTo(p[0], p[1]); ctx.stroke();
+    ink += Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]); e.preventDefault();
+  });
+  function up() { drawing = false; line = null; }
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
-  var note = document.createElement('div'); note.style.cssText = 'color:#C62828;font-size:14px;margin-top:8px;min-height:18px'; note.setAttribute('role', 'alert');
-  btn.parentNode.appendChild(note);
-  var busy = false;
-  btn.addEventListener('click', function () {
-    if (busy) return;
+  function clear() { ctx.clearRect(0, 0, cv.width, cv.height); strokes = []; ink = 0; typed = false; cv.style.opacity = 1; $('pd-type').textContent = 'Type your name instead'; }
+  $('pd-clear').addEventListener('click', clear);
+  $('pd-type').addEventListener('click', function () {
+    if (typed) { clear(); return; }
     var name = (nm.value || '').replace(/\s+/g, ' ').trim();
-    if ((name.match(/[A-Za-zÀ-ɏ]/g) || []).length < 2) { note.textContent = 'Please type your name.'; return; }
-    if (pts < 4 || ink < 40) { note.textContent = 'Please sign in the box with your finger or mouse.'; return; }
-    busy = true; btn.disabled = true; btn.textContent = 'Accepting...'; note.textContent = '';
-    ask({ a: 'accept', p: token, name: name, sig: cv.toDataURL('image/png'), key: key })
-      .then(function (d) {
-        if (d && d.v === 1 && d.kind === 'accepted') return show(d);
-        if (d && d.v === 1 && (d.kind === 'replaced' || d.kind === 'expired')) return show(d);
-        throw new Error('bad');
-      })
-      .catch(function () { busy = false; btn.disabled = false; btn.textContent = 'Accept'; note.textContent = 'That did not go through. Nothing was recorded. Please press Accept again.'; });
+    if (name.length < 2) { say('Please type your name above first.'); nm.focus(); return; }
+    clear(); typed = true; ctx.fillStyle = '#1D2A22'; ctx.font = '72px "Brush Script MT","Segoe Script",cursive'; ctx.textBaseline = 'middle'; ctx.fillText(name.slice(0, 40), 24, cv.height / 2, cv.width - 48);
+    this.textContent = 'Sign by hand instead'; say('');
+  });
+  $('pd-accept').addEventListener('click', function () {
+    var name = (nm.value || '').replace(/\s+/g, ' ').trim();
+    if ((name.match(/[A-Za-zÀ-ɏ]/g) || []).length < 2) { say('Please type your name.'); return; }
+    if (!typed && (strokes.length < 1 || ink < 40)) { say('Please sign in the box, or choose "Type your name instead".'); return; }
+    var png = cv.toDataURL('image/png');
+    send(this, 'Confirm and accept', { a: 'accept', name: name, sig: png, signature: { strokes: typed ? [] : strokes, png: png, typed: typed } }, function (d) {
+      if (d && d.v === 1 && (d.kind === 'accepted' || d.kind === 'replaced' || d.kind === 'expired')) { host.show(d); return true; } return false;
+    });
   });
 }
 
