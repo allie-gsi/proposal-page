@@ -48,6 +48,10 @@ function ask(body) {
     // The answer may still have been saved after we stopped waiting: look before saying anything went wrong.
     return view().then(function (d) {
       if (d && d.v === 1 && /^(accepted|declined|changes)$/.test(String(d.kind))) return { v: 1, kind: d.kind };
+      // A Decline or Request changes that was saved leaves the proposal open (the client may still accept), so the engine says so in "answered".
+      var an = d && d.v === 1 && d.answered;
+      if (an && body.a === 'decline' && an.declined) return { v: 1, kind: 'declined' };
+      if (an && body.a === 'changes' && an.changes) return { v: 1, kind: 'changes' };
       throw e;
     }, function () { throw e; });
   });
