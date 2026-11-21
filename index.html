@@ -20,7 +20,7 @@ body{margin:0;background:#F3F5F1;font-family:Inter,Arial,sans-serif;color:#1D2A2
 // (the same kind of address that is already in every proposal email). It holds no data and no secret.
 var ENGINE_URL = 'https://script.google.com/macros/s/AKfycbx18ImXFzOIOGEnJquVl_KmAfzv6yGtP6ipn0KX1VaFiFcO6Avxjnyezl0MjOeOYWE1Sg/exec';          // filled in by the Green Services team when the service is ready
 var PHONE = '';               // office number, filled in with ENGINE_URL
-var MAIL = 'requests@mygreenservices.com';   // where a client can write if the page cannot reach us (public address, no secret)
+var MAIL = '';   // filled in when the page is built (like PHONE): where a client can write if the page cannot reach us. The template carries no address.
 var WAIT_MS = 15000;          // reading a proposal
 var SAVE_WAIT_MS = 90000;     // saving an answer: lock, Drive saves, PDF and emails can take over a minute on a cold start
 
@@ -29,13 +29,13 @@ var token = '';
 
 function say(html) { app.innerHTML = '<div id="msg">' + html + '</div>'; }
 function call() { return PHONE ? ' or call us on ' + PHONE : ' or call us'; }
-function mailLink() { return '<a href="mailto:' + MAIL + '">' + MAIL + '</a>'; }
+function mailLink() { return MAIL ? '<a href="mailto:' + MAIL + '">' + MAIL + '</a>' : ''; }
 // Never claims anything was saved. Said whenever the system cannot be reached at all (failsafe F6).
-function oops() { say('We couldn\'t reach our system just now, so this proposal could not be opened. Nothing has been changed. Please try again in a minute, or email ' + mailLink() + call() + ' and we will help.'); }
-var UNSURE = 'We could not confirm it was saved. If you are not sure, call us or email ' + MAIL + ' and we will check for you. Please do not press the button again until you have heard from us or waited a few minutes.';
-var NOREACH = 'We couldn\'t reach our system, so nothing was saved. Please press the button once more in a minute. If it still does not work, email ' + MAIL + ' or call us and we will take care of it.';
+function oops() { say('We couldn\'t reach our system just now, so this proposal could not be opened. Nothing has been changed. Please try again in a minute' + (MAIL ? ', or email ' + mailLink() + call() : call()) + ' and we will help.'); }
+var UNSURE = 'We could not confirm it was saved. If you are not sure, call us' + (MAIL ? ' or email ' + MAIL : '') + ' and we will check for you. Please do not press the button again until you have heard from us or waited a few minutes.';
+var NOREACH = 'We couldn\'t reach our system, so nothing was saved. Please press the button once more in a minute. If it still does not work, ' + (MAIL ? 'email ' + MAIL + ' or ' : '') + 'call us and we will take care of it.';
 function addMailLink() {
-  var m = document.getElementById('pd-msg'); if (!m || document.getElementById('pd-mail')) return;
+  var m = document.getElementById('pd-msg'); if (!MAIL || !m || document.getElementById('pd-mail')) return;
   var a = document.createElement('a'); a.id = 'pd-mail'; a.href = 'mailto:' + MAIL; a.textContent = 'Email ' + MAIL; a.style.cssText = 'display:block;margin-top:8px';
   m.parentNode.insertBefore(a, m.nextSibling);
 }
@@ -56,7 +56,7 @@ function ask(body) {
   var opt = { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, redirect: 'follow', credentials: 'omit', referrerPolicy: 'no-referrer' };
   var t0 = Date.now();
   // The request "never left" only when the browser failed at once (no connection: a fast network error, never a timeout or an HTTP answer). Anything else may have been saved.
-  return timed(fetch(ENGINE_URL, opt).catch(function (e) { var x = new Error('net'); x.neverLeft = (Date.now() - t0 < 4000 || navigator.onLine === false); throw x; }), SAVE_WAIT_MS).then(function (r) { if (!r.ok) throw new Error('bad'); return r.json(); }).catch(function (e) {
+  return timed(fetch(ENGINE_URL, opt).catch(function (e) { var x = new Error('net'); x.neverLeft = (navigator.onLine === false); /* nothing-was-saved wording only when the browser itself says it is offline */ throw x; }), SAVE_WAIT_MS).then(function (r) { if (!r.ok) throw new Error('bad'); return r.json(); }).catch(function (e) {
     // The answer may still have been saved after we stopped waiting: look before saying anything went wrong.
     return view().then(function (d) {
       if (d && d.v === 1 && /^(accepted|declined|changes)$/.test(String(d.kind))) return { v: 1, kind: d.kind };
