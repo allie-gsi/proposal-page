@@ -164,7 +164,7 @@ function pdWire(host) {
   function send(btn, label, body, ok) {
     if (busy) return; busy = true; btn.disabled = true; btn.textContent = 'Sending...'; say('Saving, this can take a minute. Please keep this page open.');
     body.key = sendKey;
-    var bad = function (m) { busy = false; btn.disabled = false; btn.textContent = label; say(typeof m === 'string' && m ? m : 'That did not go through. Please press the button again. If you are not sure, reload this page to see whether it was saved.'); };
+    var bad = function (m) { busy = false; btn.disabled = false; btn.textContent = label; say(typeof m === 'string' && m ? m : 'That did not go through. Please press the button again. If you are not sure, call us.'); };
     host.submit(body, function (d) { busy = false; if (!(stale(d) || ok(d))) bad(d && d.error); }, bad);
   }
 
