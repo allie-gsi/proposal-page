@@ -79,10 +79,28 @@ function show(d) {
   app.innerHTML = d.html;
   document.title = 'Green Services proposal';
   wire(d);
+  try { lazyPhotos(); } catch (e) {}
+}
+/* 4e(g): the page text shows first with a tiny placeholder where each photo goes; each picture is then asked for by its number and swapped in. */
+var PH = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+function photoUrl(i) { return ENGINE_URL + (ENGINE_URL.indexOf('?') < 0 ? '?' : '&') + 'view=photo&i=' + i + '&p=' + encodeURIComponent(token); }
+function lazyPhotos() {
+  var imgs = [].slice.call(app.querySelectorAll('img')).filter(function (im) { return im.getAttribute('src') === PH; });
+  imgs.forEach(function (im, i) {
+    im.style.minHeight = '180px'; im.style.background = '#eef2ee';
+    var tries = 0;
+    (function go() {
+      tries++;
+      fetch(photoUrl(i), { redirect: 'follow', credentials: 'omit', referrerPolicy: 'no-referrer' }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d && d.kind === 'photo' && /^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+\/=]+$/.test(String(d.src))) { im.src = d.src; im.style.minHeight = ''; im.style.background = ''; }
+        else if (tries < 2) setTimeout(go, 1500);
+      }).catch(function () { if (tries < 3) setTimeout(go, 1500); });
+    })();
+  });
 }
 
 function wire(d) {
-  pdWire({ show: show, submit: function (body, ok, no) { body.p = token; ask(body).then(ok, function (e) { no(e && e.neverLeft ? NOREACH : UNSURE); addMailLink(); }); } });
+  pdWire({ show: show, submit: function (body, ok, no) { body.p = token; ask(body).then(function (r) { ok(r); if (body.a === 'accept' && r && r.kind === 'accepted') { try { fetch(ENGINE_URL, { method: 'POST', body: JSON.stringify({ a: 'finish', p: token }), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, redirect: 'follow', credentials: 'omit', referrerPolicy: 'no-referrer', keepalive: true }).catch(function () {}); } catch (e) {} } }, function (e) { no(e && e.neverLeft ? NOREACH : UNSURE); addMailLink(); }); } });
   var dl = document.getElementById('pd-download');   // engine marks the signed-copy button with this id
   if (dl && d.pdfB64) {
     dl.addEventListener('click', function (e) {
@@ -234,7 +252,7 @@ function pdWire(host) {
   if (!m) return notFound();
   token = m[1].toLowerCase();
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
-  ask().then(show).catch(oops);
+  ask().then(function (d) { show(d); if (d && d.cached) { try { fetch(ENGINE_URL + (ENGINE_URL.indexOf('?') < 0 ? '?' : '&') + 'view=seen&p=' + encodeURIComponent(token), { redirect: 'follow', credentials: 'omit', referrerPolicy: 'no-referrer', keepalive: true }).catch(function () {}); } catch (e) {} } }).catch(oops);   // 4e(g): a cached page still records the open
 })();
 </script>
 </body>
