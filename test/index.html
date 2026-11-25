@@ -100,7 +100,7 @@ function lazyPhotos() {
 }
 
 function wire(d) {
-  pdWire({ show: show, submit: function (body, ok, no) { body.p = token; ask(body).then(function (r) { ok(r); if (body.a === 'accept' && r && r.kind === 'accepted') { try { fetch(ENGINE_URL, { method: 'POST', body: JSON.stringify({ a: 'finish', p: token }), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, redirect: 'follow', credentials: 'omit', referrerPolicy: 'no-referrer', keepalive: true }).catch(function () {}); } catch (e) {} } }, function (e) { no(e && e.neverLeft ? NOREACH : UNSURE); addMailLink(); }); } });
+  pdWire({ show: show, view: function (ok, no) { view().then(ok, no); }, submit: function (body, ok, no) { body.p = token; ask(body).then(function (r) { ok(r); if (body.a === 'accept' && r && r.kind === 'accepted') { try { fetch(ENGINE_URL, { method: 'POST', body: JSON.stringify({ a: 'finish', p: token }), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, redirect: 'follow', credentials: 'omit', referrerPolicy: 'no-referrer', keepalive: true }).catch(function () {}); } catch (e) {} } }, function (e) { no(e && e.neverLeft ? NOREACH : UNSURE); addMailLink(); }); } });
   var dl = document.getElementById('pd-download');   // engine marks the signed-copy button with this id
   if (dl && d.pdfB64) {
     dl.addEventListener('click', function (e) {
@@ -180,13 +180,26 @@ function pdWire(host) {
     var h = doc.createElement('h2'); h.textContent = title; var p = doc.createElement('div'); p.textContent = text; d.appendChild(h); d.appendChild(p);
     var at = c.querySelector('.terms'); c.insertBefore(d, at); d.scrollIntoView({ block: 'center' });
   }
+  /* after an answer the client can fetch the signed copy right here: one button that asks again (no reload, nothing to remember) */
+  function signedButton() {
+    var box = doc.querySelector('[role="status"]'); if (!box || $('pd-getcopy')) return;
+    var b = doc.createElement('button'); b.id = 'pd-getcopy'; b.type = 'button'; b.className = 'btn'; b.style.marginTop = '12px'; b.textContent = 'Get my signed copy';
+    var m = doc.createElement('div'); m.id = 'pd-copymsg'; m.style.marginTop = '8px'; m.setAttribute('role', 'status');
+    b.addEventListener('click', function () {
+      b.disabled = true; m.textContent = 'Looking for your signed copy...';
+      var again = function (text) { b.disabled = false; m.textContent = text; };
+      if (!host.view) { host.show(); return; }
+      host.view(function (d) { if (d && d.v === 1 && d.kind === 'accepted' && d.pdfB64) host.show(d); else again('Your signed copy is still being made. Please press the button again in a minute. It is also being emailed to you.'); }, function () { again('We could not reach our system just now. Please try again in a minute. Your signed copy is also being emailed to you.'); });
+    });
+    box.appendChild(b); box.appendChild(m);
+  }
   /* the screen comes from the SERVER's answer (d.kind), never from which button was pressed; a replaced or run-out proposal says why, in the server's plain words */
   function stale(d) {
     if (!d || d.v !== 1) return false;
     if (d.kind === 'replaced' || d.kind === 'expired') {
       thanks('We could not take your answer.', d.error || (d.kind === 'replaced' ? 'This proposal was replaced. Please open the newest one from your email, or call us.' : 'This offer has run out. Please call us and we will send a new one.')); return true;
     }
-    if (d.kind === 'accepted') { thanks('Thank you. Your proposal is accepted.', 'Green Services has your signed acceptance and will be in touch about scheduling. A signed copy is saved; if you reload this page in a minute you can download it.'); return true; }
+    if (d.kind === 'accepted') { thanks('Thank you. Your proposal is accepted.', 'Green Services has your signed acceptance and will be in touch about scheduling. A signed copy is also on its way to your email.'); signedButton(); return true; }
     if (d.kind === 'declined') { thanks('Thank you for letting us know.', 'We have noted that this is not a fit right now. If anything changes, just reply to our email.'); return true; }
     if (d.kind === 'changes') { thanks('Got it, we are on it.', 'We will send you a revised proposal. You will get a new email when it is ready.'); return true; }
     return false;
@@ -249,8 +262,11 @@ function pdWire(host) {
 (function start() {
   var m = /[?&]p=([0-9a-f]{64})(?:&|$)/i.exec(location.search);
   if (!ENGINE_URL) return oops();
+  // The link is taken out of the address bar (so it is not left in view), but this tab remembers it: a reload or "back" opens the same proposal, not "could not find".
+  if (!m) { try { var kept = sessionStorage.getItem('gs-proposal'); if (/^[0-9a-f]{64}$/i.test(kept || '')) m = [0, kept]; } catch (e) {} }
   if (!m) return notFound();
   token = m[1].toLowerCase();
+  try { sessionStorage.setItem('gs-proposal', token); } catch (e) {}
   try { history.replaceState(null, '', location.pathname); } catch (e) {}
   ask().then(function (d) { show(d); if (d && d.cached) { try { fetch(ENGINE_URL + (ENGINE_URL.indexOf('?') < 0 ? '?' : '&') + 'view=seen&p=' + encodeURIComponent(token), { redirect: 'follow', credentials: 'omit', referrerPolicy: 'no-referrer', keepalive: true }).catch(function () {}); } catch (e) {} } }).catch(oops);   // 4e(g): a cached page still records the open
 })();
